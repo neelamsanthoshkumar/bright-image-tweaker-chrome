@@ -61,28 +61,33 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       if (toolTabId) {
         try {
           const existingTab = await chrome.tabs.get(toolTabId);
-          if (existingTab && existingTab.url.includes('tool.html')) {
+          if (existingTab && existingTab.url && existingTab.url.includes('tool.html')) {
+            console.log('Tool tab exists, sending new image data to it');
             // Tool tab exists, send new image data to it
-            chrome.tabs.sendMessage(toolTabId, {
+            await chrome.tabs.sendMessage(toolTabId, {
               type: 'loadNewImage',
               imageKey: imageKey,
               sourceTabId: tab.id
             });
             // Focus the existing tool tab
-            chrome.tabs.update(toolTabId, { active: true });
+            await chrome.tabs.update(toolTabId, { active: true });
             shouldCreateNewTab = false;
+            console.log('Reused existing tool tab');
           }
         } catch (error) {
+          console.log('Tool tab no longer exists, will create new one:', error);
           // Tool tab doesn't exist anymore, reset the ID
           toolTabId = null;
         }
       }
       
       if (shouldCreateNewTab) {
+        console.log('Creating new tool tab');
         // Open new tool page
         const toolUrl = chrome.runtime.getURL(`tool.html?imageKey=${imageKey}&fromTab=${tab.id}`);
         const newTab = await chrome.tabs.create({ url: toolUrl });
         toolTabId = newTab.id;
+        console.log('Created new tool tab with ID:', toolTabId);
       }
       
     } catch (error) {
@@ -94,7 +99,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // Handle messages from tool page
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'ready' && message.imageKey) {
-    console.log('Tool page ready, sending image data');
+    console.log('Tool page ready, sending image data for key:', message.imageKey);
     const imageData = imageDataStore.get(message.imageKey);
     
     if (imageData) {
@@ -130,6 +135,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Listen for tab removal to reset toolTabId if the tool tab is closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === toolTabId) {
+    console.log('Tool tab was closed, resetting toolTabId');
     toolTabId = null;
   }
 });

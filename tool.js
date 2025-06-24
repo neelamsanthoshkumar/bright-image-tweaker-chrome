@@ -1,354 +1,309 @@
-class BrightnessTool {
-    constructor() {
-        this.canvas = document.getElementById('imageCanvas');
-        this.ctx = this.canvas.getContext('2d');
-        this.canvasWrapper = document.querySelector('.canvas-wrapper');
-        this.originalImageData = null;
-        this.currentImage = null;
-        this.sourceTabId = null;
-        
-        // Zoom and pan state
-        this.zoomLevel = 1;
-        this.panX = 0;
-        this.panY = 0;
-        this.isDragging = false;
-        this.lastMouseX = 0;
-        this.lastMouseY = 0;
-        
-        // Control elements
-        this.brightnessSlider = document.getElementById('brightnessSlider');
-        this.contrastSlider = document.getElementById('contrastSlider');
-        this.exposureSlider = document.getElementById('exposureSlider');
-        this.zoomSlider = document.getElementById('zoomSlider');
-        this.resetButton = document.getElementById('resetButton');
-        this.backButton = document.getElementById('backButton');
-        this.downloadButton = document.getElementById('downloadButton');
-        
-        // Value display elements
-        this.brightnessValue = document.getElementById('brightnessValue');
-        this.contrastValue = document.getElementById('contrastValue');
-        this.exposureValue = document.getElementById('exposureValue');
-        this.zoomValue = document.getElementById('zoomValue');
-        
-        // Loading and error elements
-        this.loadingSpinner = document.getElementById('loadingSpinner');
-        this.errorMessage = document.getElementById('errorMessage');
-        
-        this.init();
+// Image processing and UI logic for the brightness tool
+let canvas, ctx;
+let originalImageData = null;
+let currentSourceTabId = null;
+let isDragging = false;
+let lastMouseX, lastMouseY;
+let panX = 0, panY = 0;
+
+// Current filter values
+let brightness = 0;
+let contrast = 0;
+let exposure = 0;
+let zoom = 1;
+
+// Initialize the tool when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Tool page loaded');
+    
+    canvas = document.getElementById('imageCanvas');
+    ctx = canvas.getContext('2d');
+    
+    setupEventListeners();
+    
+    // Check for image key from URL or wait for message
+    const urlParams = new URLSearchParams(window.location.search);
+    const imageKey = urlParams.get('imageKey');
+    const fromTab = urlParams.get('fromTab');
+    
+    if (imageKey) {
+        currentSourceTabId = fromTab;
+        requestImageData(imageKey);
     }
     
-    async init() {
-        console.log('Initializing Brightness Tool...');
+    // Listen for new images when tab is reused
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.type === 'loadNewImage') {
+            console.log('Received new image to load:', message.imageKey);
+            currentSourceTabId = message.sourceTabId;
+            requestImageData(message.imageKey);
+            sendResponse({ success: true });
+        }
+    });
+    
+    // Notify when tab is closed
+    window.addEventListener('beforeunload', () => {
+        chrome.runtime.sendMessage({ type: 'toolTabClosed' });
+    });
+});
+
+function requestImageData(imageKey) {
+    console.log('Requesting image data for key:', imageKey);
+    showLoading();
+    
+    chrome.runtime.sendMessage({
+        type: 'ready',
+        imageKey: imageKey
+    }, (response) => {
+        if (response && response.success) {
+            console.log('Received image data');
+            currentSourceTabId = response.sourceTabId;
+            loadImage(response.base64);
+        } else {
+            console.error('Failed to get image data:', response?.error);
+            showError();
+        }
+    });
+}
+
+function setupEventListeners() {
+    // Slider event listeners
+    const brightnessSlider = document.getElementById('brightnessSlider');
+    const contrastSlider = document.getElementById('contrastSlider');
+    const exposureSlider = document.getElementById('exposureSlider');
+    const zoomSlider = document.getElementById('zoomSlider');
+    
+    const brightnessValue = document.getElementById('brightnessValue');
+    const contrastValue = document.getElementById('contrastValue');
+    const exposureValue = document.getElementById('exposureValue');
+    const zoomValue = document.getElementById('zoomValue');
+    
+    brightnessSlider.addEventListener('input', (e) => {
+        brightness = parseInt(e.target.value);
+        brightnessValue.textContent = brightness;
+        applyFilters();
+    });
+    
+    contrastSlider.addEventListener('input', (e) => {
+        contrast = parseInt(e.target.value);
+        contrastValue.textContent = contrast;
+        applyFilters();
+    });
+    
+    exposureSlider.addEventListener('input', (e) => {
+        exposure = parseInt(e.target.value);
+        exposureValue.textContent = exposure;
+        applyFilters();
+    });
+    
+    zoomSlider.addEventListener('input', (e) => {
+        zoom = parseFloat(e.target.value);
+        zoomValue.textContent = zoom.toFixed(1) + 'x';
+        applyFilters();
+    });
+    
+    // Button event listeners
+    document.getElementById('resetButton').addEventListener('click', resetAll);
+    document.getElementById('downloadButton').addEventListener('click', downloadImage);
+    document.getElementById('backButton').addEventListener('click', goBack);
+    
+    // Canvas mouse events for panning
+    canvas.addEventListener('mousedown', startDrag);
+    canvas.addEventListener('mousemove', drag);
+    canvas.addEventListener('mouseup', endDrag);
+    canvas.addEventListener('mouseleave', endDrag);
+}
+
+function loadImage(base64Data) {
+    hideLoading();
+    hideError();
+    
+    const img = new Image();
+    img.onload = function() {
+        console.log('Image loaded successfully');
         
-        // Set up event listeners
-        this.setupEventListeners();
+        // Set canvas size to fit the image while maintaining aspect ratio
+        const maxWidth = 800;
+        const maxHeight = 600;
         
-        // Get image key from URL
-        const urlParams = new URLSearchParams(window.location.search);
-        const imageKey = urlParams.get('imageKey');
+        let { width, height } = img;
         
-        if (!imageKey) {
-            this.showError('No image data found');
-            return;
+        if (width > maxWidth || height > maxHeight) {
+            const ratio = Math.min(maxWidth / width, maxHeight / height);
+            width *= ratio;
+            height *= ratio;
         }
         
-        await this.loadImageFromKey(imageKey);
+        canvas.width = width;
+        canvas.height = height;
         
-        // Listen for new images from background script
-        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            if (message.type === 'loadNewImage') {
-                this.loadImageFromKey(message.imageKey, message.sourceTabId);
-                sendResponse({ success: true });
-            }
-        });
+        // Draw the image and store original data
+        ctx.drawImage(img, 0, 0, width, height);
+        originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         
-        // Notify background when tab is closed
-        window.addEventListener('beforeunload', () => {
-            chrome.runtime.sendMessage({ type: 'toolTabClosed' });
-        });
-    }
+        // Reset filters and pan
+        resetAll();
+    };
     
-    async loadImageFromKey(imageKey, newSourceTabId = null) {
-        try {
-            const response = await chrome.runtime.sendMessage({
-                type: 'ready',
-                imageKey: imageKey
-            });
-            
-            if (response.success) {
-                if (newSourceTabId) {
-                    this.sourceTabId = newSourceTabId;
-                } else {
-                    this.sourceTabId = response.sourceTabId;
-                }
-                await this.loadImage(response.base64);
-            } else {
-                this.showError(response.error || 'Failed to load image');
-            }
-        } catch (error) {
-            console.error('Error getting image data:', error);
-            this.showError('Failed to communicate with extension');
-        }
-    }
+    img.onerror = function() {
+        console.error('Failed to load image');
+        showError();
+    };
     
-    setupEventListeners() {
-        // Slider events
-        this.brightnessSlider.addEventListener('input', () => this.updateImage());
-        this.contrastSlider.addEventListener('input', () => this.updateImage());
-        this.exposureSlider.addEventListener('input', () => this.updateImage());
-        this.zoomSlider.addEventListener('input', () => this.updateZoom());
-        
-        // Button events
-        this.resetButton.addEventListener('click', () => this.resetAll());
-        this.backButton.addEventListener('click', () => this.goBack());
-        this.downloadButton.addEventListener('click', () => this.downloadImage());
-        
-        // Canvas mouse events for pan and zoom
-        this.canvas.addEventListener('wheel', (e) => this.handleWheel(e));
-        this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
-        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
-        this.canvas.addEventListener('mouseup', () => this.handleMouseUp());
-        this.canvas.addEventListener('mouseleave', () => this.handleMouseUp());
-        
-        // Update value displays
-        this.brightnessSlider.addEventListener('input', () => {
-            this.brightnessValue.textContent = this.brightnessSlider.value;
-        });
-        
-        this.contrastSlider.addEventListener('input', () => {
-            this.contrastValue.textContent = this.contrastSlider.value;
-        });
-        
-        this.exposureSlider.addEventListener('input', () => {
-            this.exposureValue.textContent = this.exposureSlider.value;
-        });
-        
-        this.zoomSlider.addEventListener('input', () => {
-            this.zoomValue.textContent = this.zoomSlider.value + 'x';
-        });
-    }
-    
-    handleWheel(e) {
-        e.preventDefault();
-        const rect = this.canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-        
-        const delta = e.deltaY > 0 ? -0.1 : 0.1;
-        const newZoom = Math.max(0.5, Math.min(3, this.zoomLevel + delta));
-        
-        // Calculate zoom center point
-        const zoomFactor = newZoom / this.zoomLevel;
-        this.panX = mouseX - (mouseX - this.panX) * zoomFactor;
-        this.panY = mouseY - (mouseY - this.panY) * zoomFactor;
-        
-        this.zoomLevel = newZoom;
-        this.zoomSlider.value = newZoom;
-        this.updateZoom();
-    }
-    
-    handleMouseDown(e) {
-        this.isDragging = true;
-        this.lastMouseX = e.clientX;
-        this.lastMouseY = e.clientY;
-        this.canvas.style.cursor = 'grabbing';
-    }
-    
-    handleMouseMove(e) {
-        if (this.isDragging) {
-            const deltaX = e.clientX - this.lastMouseX;
-            const deltaY = e.clientY - this.lastMouseY;
-            
-            this.panX += deltaX;
-            this.panY += deltaY;
-            
-            this.lastMouseX = e.clientX;
-            this.lastMouseY = e.clientY;
-            
-            this.updateZoom();
-        }
-    }
-    
-    handleMouseUp() {
-        this.isDragging = false;
-        this.canvas.style.cursor = 'grab';
-    }
-    
-    async loadImage(base64Data) {
-        try {
-            console.log('Loading image...');
-            
-            const img = new Image();
-            
-            img.onload = () => {
-                console.log('Image loaded successfully');
-                this.currentImage = img;
-                
-                // Set canvas size
-                this.canvas.width = img.width;
-                this.canvas.height = img.height;
-                
-                // Reset zoom and pan
-                this.zoomLevel = 1;
-                this.panX = 0;
-                this.panY = 0;
-                this.zoomSlider.value = 1;
-                
-                // Draw original image
-                this.ctx.drawImage(img, 0, 0);
-                
-                // Store original image data
-                this.originalImageData = this.ctx.getImageData(0, 0, img.width, img.height);
-                
-                // Hide loading spinner
-                this.loadingSpinner.style.display = 'none';
-                this.errorMessage.style.display = 'none';
-                
-                // Initial render
-                this.updateImage();
-                this.canvas.style.cursor = 'grab';
-            };
-            
-            img.onerror = () => {
-                console.error('Failed to load image');
-                this.showError('Failed to load image');
-            };
-            
-            img.src = base64Data;
-            
-        } catch (error) {
-            console.error('Error loading image:', error);
-            this.showError('Error loading image');
-        }
-    }
-    
-    updateImage() {
-        if (!this.originalImageData) return;
-        
-        const brightness = parseInt(this.brightnessSlider.value);
-        const contrast = parseInt(this.contrastSlider.value);
-        const exposure = parseInt(this.exposureSlider.value);
-        
-        // Create new image data
-        const imageData = new ImageData(
-            new Uint8ClampedArray(this.originalImageData.data),
-            this.originalImageData.width,
-            this.originalImageData.height
-        );
-        
-        // Apply filters
-        this.applyFilters(imageData, brightness, contrast, exposure);
-        
-        // Draw to canvas
-        this.ctx.putImageData(imageData, 0, 0);
-        
-        // Apply zoom and pan
-        this.updateZoom();
-    }
-    
-    applyFilters(imageData, brightness, contrast, exposure) {
-        const data = imageData.data;
-        const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
-        const exposureFactor = Math.pow(2, exposure / 50); // Exposure as power of 2
-        
-        for (let i = 0; i < data.length; i += 4) {
-            // Apply brightness (simple addition)
-            let r = data[i] + brightness;
-            let g = data[i + 1] + brightness;
-            let b = data[i + 2] + brightness;
-            
-            // Apply contrast
-            r = contrastFactor * (r - 128) + 128;
-            g = contrastFactor * (g - 128) + 128;
-            b = contrastFactor * (b - 128) + 128;
-            
-            // Apply exposure
-            r = r * exposureFactor;
-            g = g * exposureFactor;
-            b = b * exposureFactor;
-            
-            // Clamp values
-            data[i] = Math.max(0, Math.min(255, r));
-            data[i + 1] = Math.max(0, Math.min(255, g));
-            data[i + 2] = Math.max(0, Math.min(255, b));
-            // Alpha channel remains unchanged
-        }
-    }
-    
-    updateZoom() {
-        this.zoomLevel = parseFloat(this.zoomSlider.value);
-        
-        const transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoomLevel})`;
-        this.canvas.style.transform = transform;
-        this.canvas.style.transformOrigin = '0 0';
-        
-        // Update zoom value display
-        this.zoomValue.textContent = this.zoomLevel.toFixed(1) + 'x';
-    }
-    
-    resetAll() {
-        console.log('Resetting all values...');
-        
-        this.brightnessSlider.value = 0;
-        this.contrastSlider.value = 0;
-        this.exposureSlider.value = 0;
-        this.zoomSlider.value = 1;
-        
-        // Reset zoom and pan
-        this.zoomLevel = 1;
-        this.panX = 0;
-        this.panY = 0;
-        
-        // Update displays
-        this.brightnessValue.textContent = '0';
-        this.contrastValue.textContent = '0';
-        this.exposureValue.textContent = '0';
-        this.zoomValue.textContent = '1.0x';
-        
-        // Reset image
-        this.updateImage();
-    }
-    
-    async goBack() {
-        if (this.sourceTabId) {
-            try {
-                await chrome.runtime.sendMessage({
-                    type: 'focusTab',
-                    tabId: this.sourceTabId
-                });
-            } catch (error) {
-                console.error('Error focusing original tab:', error);
-            }
-        }
-    }
-    
-    downloadImage() {
-        try {
-            // Create download link
-            const link = document.createElement('a');
-            link.download = `brightness-tool-image-${Date.now()}.png`;
-            link.href = this.canvas.toDataURL('image/png');
-            
-            // Trigger download
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-            console.log('Image downloaded successfully');
-        } catch (error) {
-            console.error('Error downloading image:', error);
-        }
-    }
-    
-    showError(message) {
-        console.error('Error:', message);
-        this.loadingSpinner.style.display = 'none';
-        this.errorMessage.style.display = 'flex';
-        this.errorMessage.querySelector('p').textContent = `❌ ${message}`;
+    img.src = base64Data;
+}
+
+function showLoading() {
+    document.getElementById('loadingSpinner').style.display = 'flex';
+    document.getElementById('errorMessage').style.display = 'none';
+}
+
+function hideLoading() {
+    document.getElementById('loadingSpinner').style.display = 'none';
+}
+
+function showError() {
+    document.getElementById('loadingSpinner').style.display = 'none';
+    document.getElementById('errorMessage').style.display = 'flex';
+}
+
+function hideError() {
+    document.getElementById('errorMessage').style.display = 'none';
+}
+
+function startDrag(e) {
+    if (zoom > 1) {
+        isDragging = true;
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+        canvas.style.cursor = 'grabbing';
     }
 }
 
-// Initialize the tool when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    new BrightnessTool();
-});
+function drag(e) {
+    if (isDragging && zoom > 1) {
+        const deltaX = e.clientX - lastMouseX;
+        const deltaY = e.clientY - lastMouseY;
+        
+        panX += deltaX;
+        panY += deltaY;
+        
+        // Apply constraints to prevent dragging too far
+        const maxPanX = (canvas.width * (zoom - 1)) / 2;
+        const maxPanY = (canvas.height * (zoom - 1)) / 2;
+        
+        panX = Math.max(-maxPanX, Math.min(maxPanX, panX));
+        panY = Math.max(-maxPanY, Math.min(maxPanY, panY));
+        
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+        
+        applyFilters();
+    }
+}
+
+function endDrag() {
+    isDragging = false;
+    canvas.style.cursor = zoom > 1 ? 'grab' : 'default';
+}
+
+function applyFilters() {
+    if (!originalImageData) return;
+    
+    // Create a copy of the original image data
+    const imageData = ctx.createImageData(originalImageData);
+    const data = imageData.data;
+    const originalData = originalImageData.data;
+    
+    // Apply filters pixel by pixel
+    for (let i = 0; i < data.length; i += 4) {
+        let r = originalData[i];
+        let g = originalData[i + 1];
+        let b = originalData[i + 2];
+        
+        // Apply exposure (multiplicative)
+        if (exposure !== 0) {
+            const exposureFactor = Math.pow(2, exposure / 100);
+            r *= exposureFactor;
+            g *= exposureFactor;
+            b *= exposureFactor;
+        }
+        
+        // Apply brightness (additive)
+        if (brightness !== 0) {
+            const brightnessFactor = brightness * 2.55; // Convert to 0-255 range
+            r += brightnessFactor;
+            g += brightnessFactor;
+            b += brightnessFactor;
+        }
+        
+        // Apply contrast
+        if (contrast !== 0) {
+            const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+            r = contrastFactor * (r - 128) + 128;
+            g = contrastFactor * (g - 128) + 128;
+            b = contrastFactor * (b - 128) + 128;
+        }
+        
+        // Clamp values to 0-255
+        data[i] = Math.max(0, Math.min(255, r));
+        data[i + 1] = Math.max(0, Math.min(255, g));
+        data[i + 2] = Math.max(0, Math.min(255, b));
+        data[i + 3] = originalData[i + 3]; // Alpha channel
+    }
+    
+    // Clear canvas and apply zoom/pan
+    ctx.save();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Apply zoom and pan transformations
+    ctx.translate(canvas.width / 2 + panX, canvas.height / 2 + panY);
+    ctx.scale(zoom, zoom);
+    ctx.translate(-canvas.width / 2, -canvas.height / 2);
+    
+    // Put the filtered image data back
+    ctx.putImageData(imageData, 0, 0);
+    ctx.restore();
+    
+    // Update cursor based on zoom level
+    canvas.style.cursor = zoom > 1 ? 'grab' : 'default';
+}
+
+function resetAll() {
+    brightness = 0;
+    contrast = 0;
+    exposure = 0;
+    zoom = 1;
+    panX = 0;
+    panY = 0;
+    
+    // Reset slider values
+    document.getElementById('brightnessSlider').value = 0;
+    document.getElementById('contrastSlider').value = 0;
+    document.getElementById('exposureSlider').value = 0;
+    document.getElementById('zoomSlider').value = 1;
+    
+    // Reset display values
+    document.getElementById('brightnessValue').textContent = '0';
+    document.getElementById('contrastValue').textContent = '0';
+    document.getElementById('exposureValue').textContent = '0';
+    document.getElementById('zoomValue').textContent = '1.0x';
+    
+    applyFilters();
+}
+
+function downloadImage() {
+    const link = document.createElement('a');
+    link.download = 'edited-image.png';
+    link.href = canvas.toDataURL();
+    link.click();
+}
+
+function goBack() {
+    if (currentSourceTabId) {
+        chrome.runtime.sendMessage({
+            type: 'focusTab',
+            tabId: parseInt(currentSourceTabId)
+        });
+    }
+}
