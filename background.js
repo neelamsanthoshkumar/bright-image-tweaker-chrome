@@ -1,6 +1,7 @@
 
 // Service Worker for Chrome Extension
 let imageDataStore = new Map();
+let toolTabId = null; // Track the existing tool tab
 
 // Create context menu when extension starts
 chrome.runtime.onStartup.addListener(createContextMenu);
@@ -54,9 +55,35 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         }
       }
       
-      // Open tool page
-      const toolUrl = chrome.runtime.getURL(`tool.html?imageKey=${imageKey}&fromTab=${tab.id}`);
-      chrome.tabs.create({ url: toolUrl });
+      // Check if tool tab exists and is still valid
+      let shouldCreateNewTab = true;
+      
+      if (toolTabId) {
+        try {
+          const existingTab = await chrome.tabs.get(toolTabId);
+          if (existingTab && existingTab.url.includes('tool.html')) {
+            // Tool tab exists, send new image data to it
+            chrome.tabs.sendMessage(toolTabId, {
+              type: 'loadNewImage',
+              imageKey: imageKey,
+              sourceTabId: tab.id
+            });
+            // Focus the existing tool tab
+            chrome.tabs.update(toolTabId, { active: true });
+            shouldCreateNewTab = false;
+          }
+        } catch (error) {
+          // Tool tab doesn't exist anymore, reset the ID
+          toolTabId = null;
+        }
+      }
+      
+      if (shouldCreateNewTab) {
+        // Open new tool page
+        const toolUrl = chrome.runtime.getURL(`tool.html?imageKey=${imageKey}&fromTab=${tab.id}`);
+        const newTab = await chrome.tabs.create({ url: toolUrl });
+        toolTabId = newTab.id;
+      }
       
     } catch (error) {
       console.error('Error processing image:', error);
@@ -91,5 +118,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: true });
   }
   
+  // Handle tab closing to reset toolTabId
+  if (message.type === 'toolTabClosed') {
+    toolTabId = null;
+    sendResponse({ success: true });
+  }
+  
   return true; // Keep message channel open for async response
+});
+
+// Listen for tab removal to reset toolTabId if the tool tab is closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId === toolTabId) {
+    toolTabId = null;
+  }
 });

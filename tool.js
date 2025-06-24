@@ -2,13 +2,23 @@ class BrightnessTool {
     constructor() {
         this.canvas = document.getElementById('imageCanvas');
         this.ctx = this.canvas.getContext('2d');
+        this.canvasWrapper = document.querySelector('.canvas-wrapper');
         this.originalImageData = null;
         this.currentImage = null;
         this.sourceTabId = null;
         
+        // Zoom and pan state
+        this.zoomLevel = 1;
+        this.panX = 0;
+        this.panY = 0;
+        this.isDragging = false;
+        this.lastMouseX = 0;
+        this.lastMouseY = 0;
+        
         // Control elements
         this.brightnessSlider = document.getElementById('brightnessSlider');
         this.contrastSlider = document.getElementById('contrastSlider');
+        this.exposureSlider = document.getElementById('exposureSlider');
         this.zoomSlider = document.getElementById('zoomSlider');
         this.resetButton = document.getElementById('resetButton');
         this.backButton = document.getElementById('backButton');
@@ -17,6 +27,7 @@ class BrightnessTool {
         // Value display elements
         this.brightnessValue = document.getElementById('brightnessValue');
         this.contrastValue = document.getElementById('contrastValue');
+        this.exposureValue = document.getElementById('exposureValue');
         this.zoomValue = document.getElementById('zoomValue');
         
         // Loading and error elements
@@ -35,14 +46,29 @@ class BrightnessTool {
         // Get image key from URL
         const urlParams = new URLSearchParams(window.location.search);
         const imageKey = urlParams.get('imageKey');
-        const fromTab = urlParams.get('fromTab');
         
         if (!imageKey) {
             this.showError('No image data found');
             return;
         }
         
-        // Request image data from background script
+        await this.loadImageFromKey(imageKey);
+        
+        // Listen for new images from background script
+        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            if (message.type === 'loadNewImage') {
+                this.loadImageFromKey(message.imageKey, message.sourceTabId);
+                sendResponse({ success: true });
+            }
+        });
+        
+        // Notify background when tab is closed
+        window.addEventListener('beforeunload', () => {
+            chrome.runtime.sendMessage({ type: 'toolTabClosed' });
+        });
+    }
+    
+    async loadImageFromKey(imageKey, newSourceTabId = null) {
         try {
             const response = await chrome.runtime.sendMessage({
                 type: 'ready',
@@ -50,7 +76,11 @@ class BrightnessTool {
             });
             
             if (response.success) {
-                this.sourceTabId = response.sourceTabId;
+                if (newSourceTabId) {
+                    this.sourceTabId = newSourceTabId;
+                } else {
+                    this.sourceTabId = response.sourceTabId;
+                }
                 await this.loadImage(response.base64);
             } else {
                 this.showError(response.error || 'Failed to load image');
@@ -65,6 +95,7 @@ class BrightnessTool {
         // Slider events
         this.brightnessSlider.addEventListener('input', () => this.updateImage());
         this.contrastSlider.addEventListener('input', () => this.updateImage());
+        this.exposureSlider.addEventListener('input', () => this.updateImage());
         this.zoomSlider.addEventListener('input', () => this.updateZoom());
         
         // Button events
@@ -72,15 +103,12 @@ class BrightnessTool {
         this.backButton.addEventListener('click', () => this.goBack());
         this.downloadButton.addEventListener('click', () => this.downloadImage());
         
-        // Canvas mouse wheel for zoom
-        this.canvas.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            const delta = e.deltaY > 0 ? -0.1 : 0.1;
-            const currentZoom = parseFloat(this.zoomSlider.value);
-            const newZoom = Math.max(0.5, Math.min(3, currentZoom + delta));
-            this.zoomSlider.value = newZoom;
-            this.updateZoom();
-        });
+        // Canvas mouse events for pan and zoom
+        this.canvas.addEventListener('wheel', (e) => this.handleWheel(e));
+        this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
+        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        this.canvas.addEventListener('mouseup', () => this.handleMouseUp());
+        this.canvas.addEventListener('mouseleave', () => this.handleMouseUp());
         
         // Update value displays
         this.brightnessSlider.addEventListener('input', () => {
@@ -91,9 +119,59 @@ class BrightnessTool {
             this.contrastValue.textContent = this.contrastSlider.value;
         });
         
+        this.exposureSlider.addEventListener('input', () => {
+            this.exposureValue.textContent = this.exposureSlider.value;
+        });
+        
         this.zoomSlider.addEventListener('input', () => {
             this.zoomValue.textContent = this.zoomSlider.value + 'x';
         });
+    }
+    
+    handleWheel(e) {
+        e.preventDefault();
+        const rect = this.canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        const newZoom = Math.max(0.5, Math.min(3, this.zoomLevel + delta));
+        
+        // Calculate zoom center point
+        const zoomFactor = newZoom / this.zoomLevel;
+        this.panX = mouseX - (mouseX - this.panX) * zoomFactor;
+        this.panY = mouseY - (mouseY - this.panY) * zoomFactor;
+        
+        this.zoomLevel = newZoom;
+        this.zoomSlider.value = newZoom;
+        this.updateZoom();
+    }
+    
+    handleMouseDown(e) {
+        this.isDragging = true;
+        this.lastMouseX = e.clientX;
+        this.lastMouseY = e.clientY;
+        this.canvas.style.cursor = 'grabbing';
+    }
+    
+    handleMouseMove(e) {
+        if (this.isDragging) {
+            const deltaX = e.clientX - this.lastMouseX;
+            const deltaY = e.clientY - this.lastMouseY;
+            
+            this.panX += deltaX;
+            this.panY += deltaY;
+            
+            this.lastMouseX = e.clientX;
+            this.lastMouseY = e.clientY;
+            
+            this.updateZoom();
+        }
+    }
+    
+    handleMouseUp() {
+        this.isDragging = false;
+        this.canvas.style.cursor = 'grab';
     }
     
     async loadImage(base64Data) {
@@ -110,6 +188,12 @@ class BrightnessTool {
                 this.canvas.width = img.width;
                 this.canvas.height = img.height;
                 
+                // Reset zoom and pan
+                this.zoomLevel = 1;
+                this.panX = 0;
+                this.panY = 0;
+                this.zoomSlider.value = 1;
+                
                 // Draw original image
                 this.ctx.drawImage(img, 0, 0);
                 
@@ -118,9 +202,11 @@ class BrightnessTool {
                 
                 // Hide loading spinner
                 this.loadingSpinner.style.display = 'none';
+                this.errorMessage.style.display = 'none';
                 
                 // Initial render
                 this.updateImage();
+                this.canvas.style.cursor = 'grab';
             };
             
             img.onerror = () => {
@@ -141,6 +227,7 @@ class BrightnessTool {
         
         const brightness = parseInt(this.brightnessSlider.value);
         const contrast = parseInt(this.contrastSlider.value);
+        const exposure = parseInt(this.exposureSlider.value);
         
         // Create new image data
         const imageData = new ImageData(
@@ -149,19 +236,20 @@ class BrightnessTool {
             this.originalImageData.height
         );
         
-        // Apply brightness and contrast
-        this.applyFilters(imageData, brightness, contrast);
+        // Apply filters
+        this.applyFilters(imageData, brightness, contrast, exposure);
         
         // Draw to canvas
         this.ctx.putImageData(imageData, 0, 0);
         
-        // Apply zoom
+        // Apply zoom and pan
         this.updateZoom();
     }
     
-    applyFilters(imageData, brightness, contrast) {
+    applyFilters(imageData, brightness, contrast, exposure) {
         const data = imageData.data;
-        const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+        const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+        const exposureFactor = Math.pow(2, exposure / 50); // Exposure as power of 2
         
         for (let i = 0; i < data.length; i += 4) {
             // Apply brightness (simple addition)
@@ -170,9 +258,14 @@ class BrightnessTool {
             let b = data[i + 2] + brightness;
             
             // Apply contrast
-            r = factor * (r - 128) + 128;
-            g = factor * (g - 128) + 128;
-            b = factor * (b - 128) + 128;
+            r = contrastFactor * (r - 128) + 128;
+            g = contrastFactor * (g - 128) + 128;
+            b = contrastFactor * (b - 128) + 128;
+            
+            // Apply exposure
+            r = r * exposureFactor;
+            g = g * exposureFactor;
+            b = b * exposureFactor;
             
             // Clamp values
             data[i] = Math.max(0, Math.min(255, r));
@@ -183,14 +276,14 @@ class BrightnessTool {
     }
     
     updateZoom() {
-        const zoom = parseFloat(this.zoomSlider.value);
-        const canvasContainer = document.querySelector('.canvas-container');
+        this.zoomLevel = parseFloat(this.zoomSlider.value);
         
-        this.canvas.style.transform = `scale(${zoom})`;
-        this.canvas.style.transformOrigin = 'center center';
+        const transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoomLevel})`;
+        this.canvas.style.transform = transform;
+        this.canvas.style.transformOrigin = '0 0';
         
         // Update zoom value display
-        this.zoomValue.textContent = zoom.toFixed(1) + 'x';
+        this.zoomValue.textContent = this.zoomLevel.toFixed(1) + 'x';
     }
     
     resetAll() {
@@ -198,11 +291,18 @@ class BrightnessTool {
         
         this.brightnessSlider.value = 0;
         this.contrastSlider.value = 0;
+        this.exposureSlider.value = 0;
         this.zoomSlider.value = 1;
+        
+        // Reset zoom and pan
+        this.zoomLevel = 1;
+        this.panX = 0;
+        this.panY = 0;
         
         // Update displays
         this.brightnessValue.textContent = '0';
         this.contrastValue.textContent = '0';
+        this.exposureValue.textContent = '0';
         this.zoomValue.textContent = '1.0x';
         
         // Reset image
@@ -216,15 +316,9 @@ class BrightnessTool {
                     type: 'focusTab',
                     tabId: this.sourceTabId
                 });
-                // Close current tab
-                window.close();
             } catch (error) {
                 console.error('Error focusing original tab:', error);
-                // Fallback: just close current tab
-                window.close();
             }
-        } else {
-            window.close();
         }
     }
     
