@@ -1,0 +1,33 @@
+
+{
+  "manifest_version": 3,
+  "name": "Send to Brightness Tool",
+  "version": "1.0.0",
+  "description": "Right-click on any image to open it in an advanced brightness and contrast editor",
+  "permissions": [
+    "contextMenus",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["tool.html", "tool.js", "tool.css"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "action": {
+    "default_title": "Send to Brightness Tool"
+  }
+}

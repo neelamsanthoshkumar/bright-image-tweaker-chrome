@@ -1,0 +1,94 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brightness Tool</title>
+    <link rel="stylesheet" href="tool.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1 class="title">🔆 Brightness Tool</h1>
+            <button id="backButton" class="back-button" title="Back to Original Tab">
+                ← Back to Original Tab
+            </button>
+        </header>
+
+        <div class="main-content">
+            <div class="canvas-container">
+                <canvas id="imageCanvas" class="image-canvas"></canvas>
+                <div id="loadingSpinner" class="loading-spinner">
+                    <div class="spinner"></div>
+                    <p>Loading image...</p>
+                </div>
+                <div id="errorMessage" class="error-message" style="display: none;">
+                    <p>❌ Failed to load image</p>
+                </div>
+            </div>
+
+            <div class="controls-panel">
+                <div class="control-group">
+                    <label for="brightnessSlider" class="control-label">
+                        ☀️ Brightness
+                        <span id="brightnessValue" class="control-value">0</span>
+                    </label>
+                    <input 
+                        type="range" 
+                        id="brightnessSlider" 
+                        class="slider" 
+                        min="-100" 
+                        max="100" 
+                        value="0"
+                        step="1"
+                    >
+                </div>
+
+                <div class="control-group">
+                    <label for="contrastSlider" class="control-label">
+                        🔳 Contrast
+                        <span id="contrastValue" class="control-value">0</span>
+                    </label>
+                    <input 
+                        type="range" 
+                        id="contrastSlider" 
+                        class="slider" 
+                        min="-100" 
+                        max="100" 
+                        value="0"
+                        step="1"
+                    >
+                </div>
+
+                <div class="control-group">
+                    <label for="zoomSlider" class="control-label">
+                        🔍 Zoom
+                        <span id="zoomValue" class="control-value">1.0x</span>
+                    </label>
+                    <input 
+                        type="range" 
+                        id="zoomSlider" 
+                        class="slider" 
+                        min="0.5" 
+                        max="3" 
+                        value="1" 
+                        step="0.1"
+                    >
+                </div>
+
+                <div class="button-group">
+                    <button id="resetButton" class="reset-button">
+                        🔄 Reset All
+                    </button>
+                    <button id="downloadButton" class="download-button">
+                        💾 Download
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="tool.js"></script>
+</body>
+</html>
