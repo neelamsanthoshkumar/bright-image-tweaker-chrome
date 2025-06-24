@@ -29,5 +29,11 @@
   ],
   "action": {
     "default_title": "Send to Brightness Tool"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "brightness-tool@extension.local",
+      "strict_min_version": "109.0"
+    }
   }
 }

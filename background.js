@@ -58,25 +58,38 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       // Check if tool tab exists and is still valid
       let shouldCreateNewTab = true;
       
-      if (toolTabId) {
+      if (toolTabId !== null) {
         try {
-          const existingTab = await chrome.tabs.get(toolTabId);
+          // Query all tabs to find our tool tab
+          const tabs = await chrome.tabs.query({});
+          const existingTab = tabs.find(t => t.id === toolTabId);
+          
           if (existingTab && existingTab.url && existingTab.url.includes('tool.html')) {
             console.log('Tool tab exists, sending new image data to it');
-            // Tool tab exists, send new image data to it
-            await chrome.tabs.sendMessage(toolTabId, {
-              type: 'loadNewImage',
-              imageKey: imageKey,
-              sourceTabId: tab.id
-            });
-            // Focus the existing tool tab
-            await chrome.tabs.update(toolTabId, { active: true });
-            shouldCreateNewTab = false;
-            console.log('Reused existing tool tab');
+            
+            // Send message and wait for response
+            try {
+              await chrome.tabs.sendMessage(toolTabId, {
+                type: 'loadNewImage',
+                imageKey: imageKey,
+                sourceTabId: tab.id
+              });
+              
+              // Focus the existing tool tab
+              await chrome.tabs.update(toolTabId, { active: true });
+              await chrome.windows.update(existingTab.windowId, { focused: true });
+              shouldCreateNewTab = false;
+              console.log('Successfully reused existing tool tab');
+            } catch (messageError) {
+              console.log('Failed to send message to existing tab:', messageError);
+              toolTabId = null;
+            }
+          } else {
+            console.log('Tool tab no longer exists or URL changed');
+            toolTabId = null;
           }
         } catch (error) {
-          console.log('Tool tab no longer exists, will create new one:', error);
-          // Tool tab doesn't exist anymore, reset the ID
+          console.log('Error checking existing tab:', error);
           toolTabId = null;
         }
       }
@@ -125,7 +138,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   // Handle tab closing to reset toolTabId
   if (message.type === 'toolTabClosed') {
-    toolTabId = null;
+    if (sender.tab && sender.tab.id === toolTabId) {
+      toolTabId = null;
+      console.log('Tool tab closed, reset toolTabId');
+    }
     sendResponse({ success: true });
   }
   
@@ -135,7 +151,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Listen for tab removal to reset toolTabId if the tool tab is closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === toolTabId) {
-    console.log('Tool tab was closed, resetting toolTabId');
+    console.log('Tool tab was removed, resetting toolTabId');
     toolTabId = null;
   }
 });

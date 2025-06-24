@@ -32,18 +32,24 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // Listen for new images when tab is reused
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (message.type === 'loadNewImage') {
-            console.log('Received new image to load:', message.imageKey);
-            currentSourceTabId = message.sourceTabId;
-            requestImageData(message.imageKey);
-            sendResponse({ success: true });
-        }
-    });
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            console.log('Received message:', message);
+            if (message.type === 'loadNewImage') {
+                console.log('Received new image to load:', message.imageKey);
+                currentSourceTabId = message.sourceTabId;
+                requestImageData(message.imageKey);
+                sendResponse({ success: true });
+                return true;
+            }
+        });
+    }
     
     // Notify when tab is closed
     window.addEventListener('beforeunload', () => {
-        chrome.runtime.sendMessage({ type: 'toolTabClosed' });
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({ type: 'toolTabClosed' });
+        }
     });
 });
 
@@ -51,19 +57,21 @@ function requestImageData(imageKey) {
     console.log('Requesting image data for key:', imageKey);
     showLoading();
     
-    chrome.runtime.sendMessage({
-        type: 'ready',
-        imageKey: imageKey
-    }, (response) => {
-        if (response && response.success) {
-            console.log('Received image data');
-            currentSourceTabId = response.sourceTabId;
-            loadImage(response.base64);
-        } else {
-            console.error('Failed to get image data:', response?.error);
-            showError();
-        }
-    });
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({
+            type: 'ready',
+            imageKey: imageKey
+        }, (response) => {
+            if (response && response.success) {
+                console.log('Received image data');
+                currentSourceTabId = response.sourceTabId;
+                loadImage(response.base64);
+            } else {
+                console.error('Failed to get image data:', response?.error);
+                showError();
+            }
+        });
+    }
 }
 
 function setupEventListeners() {
@@ -97,7 +105,13 @@ function setupEventListeners() {
     });
     
     zoomSlider.addEventListener('input', (e) => {
-        zoom = parseFloat(e.target.value);
+        const newZoom = parseFloat(e.target.value);
+        // Reset pan when zoom changes to center the image
+        if (newZoom !== zoom) {
+            panX = 0;
+            panY = 0;
+        }
+        zoom = newZoom;
         zoomValue.textContent = zoom.toFixed(1) + 'x';
         applyFilters();
     });
@@ -107,11 +121,39 @@ function setupEventListeners() {
     document.getElementById('downloadButton').addEventListener('click', downloadImage);
     document.getElementById('backButton').addEventListener('click', goBack);
     
-    // Canvas mouse events for panning
+    // Canvas mouse events for panning (both mouse and touch)
     canvas.addEventListener('mousedown', startDrag);
     canvas.addEventListener('mousemove', drag);
     canvas.addEventListener('mouseup', endDrag);
     canvas.addEventListener('mouseleave', endDrag);
+    
+    // Touch events for mobile support
+    canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+    canvas.addEventListener('touchend', endDrag);
+}
+
+function handleTouchStart(e) {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        const rect = canvas.getBoundingClientRect();
+        startDrag({
+            clientX: touch.clientX,
+            clientY: touch.clientY
+        });
+    }
+}
+
+function handleTouchMove(e) {
+    e.preventDefault();
+    if (e.touches.length === 1 && isDragging) {
+        const touch = e.touches[0];
+        drag({
+            clientX: touch.clientX,
+            clientY: touch.clientY
+        });
+    }
 }
 
 function loadImage(base64Data) {
@@ -210,6 +252,9 @@ function endDrag() {
 function applyFilters() {
     if (!originalImageData) return;
     
+    // Clear canvas first
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
     // Create a copy of the original image data
     const imageData = ctx.createImageData(originalImageData);
     const data = imageData.data;
@@ -252,17 +297,24 @@ function applyFilters() {
         data[i + 3] = originalData[i + 3]; // Alpha channel
     }
     
-    // Clear canvas and apply zoom/pan
-    ctx.save();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
     // Apply zoom and pan transformations
-    ctx.translate(canvas.width / 2 + panX, canvas.height / 2 + panY);
+    ctx.save();
+    
+    // Move to center of canvas
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    
+    // Apply pan offset
+    ctx.translate(panX, panY);
+    
+    // Apply zoom
     ctx.scale(zoom, zoom);
+    
+    // Move back so image is centered
     ctx.translate(-canvas.width / 2, -canvas.height / 2);
     
-    // Put the filtered image data back
+    // Put the filtered image data
     ctx.putImageData(imageData, 0, 0);
+    
     ctx.restore();
     
     // Update cursor based on zoom level
